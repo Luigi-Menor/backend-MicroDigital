@@ -1,0 +1,662 @@
+// Prisma schema — MicroDigital
+// Modela los 11 módulos funcionales de la plataforma de micronegocios.
+// Estrategia de aislamiento multi-tenant: todas las tablas operativas llevan
+// negocioId como clave foránea obligatoria. Todo acceso a datos DEBE filtrar
+// por negocioId (ver src/lib/tenant.ts) — nunca se consulta sin ese filtro.
+//
+// Mapa módulo -> modelos:
+//   1. Ventas/POS ............ Venta, VentaDetalle, VentaAuditoria
+//   2. Inventario ............ MovimientoInventario (kardex)
+//   3. Productos y servicios . Producto, ProductoVariante, Categoria
+//   4. Clientes .............. Cliente
+//   5. Fiados / CxC .......... Venta.saldoPendiente, Abono
+//   6. Gastos ................ Gasto, CategoriaGasto
+//   7. Proveedores y compras . Proveedor, Compra, CompraDetalle, PagoProveedor
+//   8. Estadisticas .......... (solo lectura sobre los anteriores)
+//   9. Reportes .............. (solo lectura sobre los anteriores)
+//  10. Empleados ............. Usuario (+ campos laborales)
+//  11. Comprobantes .......... Comprobante, Consecutivo
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Rol {
+  SUPERADMIN
+  ADMINISTRADOR
+  VENDEDOR
+}
+
+/// Formas de pago aceptadas. FIADO es la única que genera cuenta por cobrar
+/// (módulo 5): las demás se consideran liquidadas en el momento de la venta.
+enum FormaPago {
+  EFECTIVO
+  TRANSFERENCIA
+  FIADO
+  TARJETA
+  OTRO
+}
+
+enum EstadoVenta {
+  ACTIVA
+  ANULADA
+  EDITADA
+}
+
+enum AccionAuditoria {
+  ANULADA
+  EDITADA
+}
+
+/// Módulo 3 — un ítem del catálogo puede ser un bien físico (lleva stock) o
+/// un servicio (no lleva stock ni genera movimientos de inventario).
+enum TipoItem {
+  PRODUCTO
+  SERVICIO
+}
+
+/// Módulo 2 — tipos de movimiento del kardex. Los VENTA/COMPRA los genera el
+/// sistema; ENTRADA/SALIDA/AJUSTE/MERMA los registra manualmente el usuario.
+enum TipoMovimiento {
+  ENTRADA
+  SALIDA
+  AJUSTE
+  MERMA
+  VENTA
+  ANULACION_VENTA
+  COMPRA
+  ANULACION_COMPRA
+}
+
+/// Módulo 7 — una compra en BORRADOR todavía no afectó el inventario.
+/// Solo al pasar a RECIBIDA se incrementa el stock (y se revierte al ANULAR).
+enum EstadoCompra {
+  BORRADOR
+  RECIBIDA
+  ANULADA
+}
+
+enum EstadoComprobante {
+  EMITIDO
+  ANULADO
+}
+
+/// Módulo 11 — tipos de comprobante digital emitibles.
+enum TipoComprobante {
+  TICKET
+  FACTURA
+  RECIBO
+  COTIZACION
+  COMPROBANTE_ABONO
+}
+
+/// Canal por el que se entregó el comprobante al cliente.
+enum MedioEnvio {
+  WHATSAPP
+  EMAIL
+  SMS
+  DESCARGA
+}
+
+/// Contadores que requieren numeración consecutiva por negocio (módulo 11).
+enum TipoConsecutivo {
+  VENTA
+  TICKET
+  FACTURA
+  RECIBO
+  COTIZACION
+  COMPROBANTE_ABONO
+  COMPRA
+  GASTO
+  ABONO
+}
+
+/// RF-001 — Registro de negocio (onboarding).
+/// Los campos fiscales/comerciales (nit, direccion, logoUrl, impuesto) los
+/// consume el módulo 11 al imprimir el encabezado de cada comprobante.
+model Negocio {
+  id                 String   @id @default(cuid())
+  nombre             String
+  tipoNegocio        String
+  contacto           String
+  nit                String?
+  direccion          String?
+  logoUrl            String?
+  moneda             String   @default("COP")
+  simboloMoneda      String   @default("$")
+  /// Porcentaje de impuesto por defecto (ej. 19.00 = IVA 19%). 0 = no aplica.
+  impuestoPorcentaje Decimal  @default(0) @db.Decimal(5, 2)
+  activo             Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @default(now()) @updatedAt
+
+  usuarios        Usuario[]
+  categorias      Categoria[]
+  productos       Producto[]
+  clientes        Cliente[]
+  ventas          Venta[]
+  movimientos     MovimientoInventario[]
+  abonos          Abono[]
+  categoriasGasto CategoriaGasto[]
+  gastos          Gasto[]
+  proveedores     Proveedor[]
+  compras         Compra[]
+  pagosProveedor  PagoProveedor[]
+  comprobantes    Comprobante[]
+  consecutivos    Consecutivo[]
+
+  @@map("negocios")
+}
+
+/// RF-002 / RF-004 — Usuarios y roles (Superadmin no pertenece a ningún negocio).
+/// `passwordHash` es opcional porque un usuario puede haberse creado
+/// exclusivamente vía Google (ver RF-002-B: login/registro con Google). A
+/// nivel de aplicación se exige que exista SIEMPRE al menos uno de los dos:
+/// `passwordHash` o `googleId` (ver validación en las rutas de auth).
+///
+/// Módulo 10 — este mismo modelo representa al EMPLEADO. No se creó una tabla
+/// aparte a propósito: un empleado que no puede iniciar sesión no podría
+/// registrar ventas, y el seguimiento de ventas por empleado se hace por
+/// `Venta.usuarioId`. Los campos laborales son opcionales para no romper los
+/// usuarios ya existentes.
+model Usuario {
+  id           String   @id @default(cuid())
+  negocioId    String?
+  negocio      Negocio? @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  nombre       String
+  email        String   @unique
+  passwordHash String?
+  googleId     String?  @unique
+  rol          Rol
+  activo       Boolean  @default(true)
+
+  // --- Módulo 10: datos laborales (opcionales) ---
+  telefono          String?
+  documento         String?
+  cargo             String?
+  fechaIngreso      DateTime?
+  salarioBase       Decimal?  @db.Decimal(12, 2)
+  /// Meta de ventas mensual en dinero. Alimenta el % de cumplimiento del
+  /// endpoint de rendimiento; null = sin meta definida.
+  metaVentasMensual Decimal?  @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  ventasRegistradas    Venta[]                @relation("VentaUsuario")
+  auditoriasRealizadas VentaAuditoria[]
+  resetTokens          PasswordResetToken[]
+  movimientos          MovimientoInventario[]
+  abonosRegistrados    Abono[]
+  gastosRegistrados    Gasto[]
+  comprasRegistradas   Compra[]
+  pagosProveedor       PagoProveedor[]
+  comprobantesEmitidos Comprobante[]
+
+  @@index([negocioId])
+  @@map("usuarios")
+}
+
+/// RF-003 — Recuperación de contraseña (token expira a los 15 min).
+/// Se guarda solo el HASH (sha256) del token, nunca el valor crudo: si la
+/// base de datos se filtra, el hash no permite tomar la cuenta directamente
+/// (igual criterio que con `passwordHash` en Usuario).
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  usuarioId String
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  usado     Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([usuarioId])
+  @@map("password_reset_tokens")
+}
+
+/// RF-006 — Gestión de categorías (módulo 3)
+model Categoria {
+  id        String   @id @default(cuid())
+  negocioId String
+  negocio   Negocio  @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  nombre    String
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  productos Producto[]
+
+  @@unique([negocioId, nombre])
+  @@index([negocioId])
+  @@map("categorias")
+}
+
+/// RF-007 / RF-008 — Productos y servicios (módulo 3).
+///
+/// DÓNDE VIVE EL STOCK (regla central del módulo 2):
+///   - Producto SIN variantes -> el stock real es `Producto.stock`.
+///   - Producto CON variantes -> el stock real es `ProductoVariante.stock`, y
+///     `Producto.stock` queda como caché de la suma (no se usa para validar).
+///   - tipo = SERVICIO        -> no lleva stock y nunca genera kardex.
+/// Toda escritura de stock pasa por src/lib/inventario.ts, que centraliza
+/// esta regla junto con el registro del movimiento correspondiente.
+model Producto {
+  id          String     @id @default(cuid())
+  negocioId   String
+  negocio     Negocio    @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  categoriaId String?
+  categoria   Categoria? @relation(fields: [categoriaId], references: [id])
+  tipo        TipoItem   @default(PRODUCTO)
+  nombre      String
+  descripcion String?
+  sku         String?
+  unidad      String?
+  precio      Decimal    @db.Decimal(12, 2)
+  /// Costo de reposición. Base del margen en el módulo 8 (estadísticas).
+  precioCosto Decimal?   @db.Decimal(12, 2)
+  stock       Int        @default(0)
+  stockMinimo Int // Obligatorio a nivel de aplicación: no hay fallback (RF-008 / P4)
+  activo      Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @default(now()) @updatedAt
+
+  variantes      ProductoVariante[]
+  detallesVenta  VentaDetalle[]
+  detallesCompra CompraDetalle[]
+  movimientos    MovimientoInventario[]
+
+  @@unique([negocioId, sku])
+  @@index([negocioId])
+  @@index([negocioId, activo])
+  @@map("productos")
+}
+
+/// Módulo 3 — variantes de un producto (talla, color, presentación...).
+/// `precio` null significa "hereda el precio del producto padre".
+model ProductoVariante {
+  id          String   @id @default(cuid())
+  productoId  String
+  producto    Producto @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  nombre      String
+  sku         String?
+  precio      Decimal? @db.Decimal(12, 2)
+  precioCosto Decimal? @db.Decimal(12, 2)
+  stock       Int      @default(0)
+  stockMinimo Int      @default(0)
+  activo      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+
+  detallesVenta  VentaDetalle[]
+  detallesCompra CompraDetalle[]
+  movimientos    MovimientoInventario[]
+
+  @@unique([productoId, nombre])
+  @@index([productoId])
+  @@map("producto_variantes")
+}
+
+/// Módulo 2 — Kardex: histórico inmutable de todo cambio de existencias.
+/// `stockAnterior`/`stockResultante` se guardan materializados para poder
+/// auditar el inventario sin tener que reproyectar toda la historia.
+model MovimientoInventario {
+  id              String            @id @default(cuid())
+  negocioId       String
+  negocio         Negocio           @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  productoId      String
+  producto        Producto          @relation(fields: [productoId], references: [id], onDelete: Cascade)
+  varianteId      String?
+  variante        ProductoVariante? @relation(fields: [varianteId], references: [id], onDelete: Cascade)
+  tipo            TipoMovimiento
+  /// Siempre positiva: el signo lo determina `tipo`.
+  cantidad        Int
+  stockAnterior   Int
+  stockResultante Int
+  costoUnitario   Decimal?          @db.Decimal(12, 2)
+  motivo          String?
+  /// Trazabilidad al documento que originó el movimiento ("venta" | "compra").
+  referenciaTipo  String?
+  referenciaId    String?
+  usuarioId       String?
+  usuario         Usuario?          @relation(fields: [usuarioId], references: [id])
+  createdAt       DateTime          @default(now())
+
+  @@index([negocioId, createdAt])
+  @@index([productoId])
+  @@index([referenciaTipo, referenciaId])
+  @@map("movimientos_inventario")
+}
+
+/// RF-012 — Clientes (módulo 4).
+/// `saldoDeuda` es el total fiado pendiente. Se mantiene como agregado
+/// materializado (se incrementa al fiar y se decrementa al abonar) para no
+/// recalcular sobre todas las ventas en cada consulta del POS.
+model Cliente {
+  id            String   @id @default(cuid())
+  negocioId     String
+  negocio       Negocio  @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  nombre        String
+  contacto      String?
+  email         String?
+  documento     String?
+  direccion     String?
+  notas         String?
+  saldoDeuda    Decimal  @default(0) @db.Decimal(12, 2)
+  /// Tope de fiado permitido. null = sin límite (comportamiento previo).
+  limiteCredito Decimal? @db.Decimal(12, 2)
+  activo        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now()) @updatedAt
+
+  ventas Venta[]
+  abonos Abono[]
+
+  @@index([negocioId])
+  @@map("clientes")
+}
+
+/// RF-009 / RF-010 / RF-011 — Venta (módulo 1: POS).
+///
+/// Desglose monetario: total = subtotal - descuento + impuesto.
+/// `saldoPendiente` solo es > 0 en ventas FIADO y es la unidad de cuenta del
+/// módulo 5 (cuentas por cobrar); los abonos lo van reduciendo.
+model Venta {
+  id             String      @id @default(cuid())
+  negocioId      String
+  negocio        Negocio     @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  /// Consecutivo legible por negocio (1, 2, 3...). Ver src/lib/consecutivos.ts.
+  numero         Int
+  clienteId      String?
+  cliente        Cliente?    @relation(fields: [clienteId], references: [id])
+  usuarioId      String
+  usuario        Usuario     @relation("VentaUsuario", fields: [usuarioId], references: [id])
+  formaPago      FormaPago
+  subtotal       Decimal     @default(0) @db.Decimal(12, 2)
+  /// Descuento global de la venta (además de los descuentos por línea).
+  descuento      Decimal     @default(0) @db.Decimal(12, 2)
+  impuesto       Decimal     @default(0) @db.Decimal(12, 2)
+  total          Decimal     @db.Decimal(12, 2)
+  /// Efectivo recibido y devuelta. Solo informativos para el cierre de caja.
+  montoPagado    Decimal?    @db.Decimal(12, 2)
+  cambio         Decimal?    @db.Decimal(12, 2)
+  saldoPendiente Decimal     @default(0) @db.Decimal(12, 2)
+  estado         EstadoVenta @default(ACTIVA)
+  nota           String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @default(now()) @updatedAt
+
+  detalles     VentaDetalle[]
+  auditorias   VentaAuditoria[]
+  abonos       Abono[]
+  comprobantes Comprobante[]
+
+  @@unique([negocioId, numero])
+  @@index([negocioId, createdAt])
+  @@index([negocioId, estado])
+  @@index([clienteId])
+  @@index([usuarioId])
+  @@map("ventas")
+}
+
+model VentaDetalle {
+  id             String            @id @default(cuid())
+  ventaId        String
+  venta          Venta             @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  productoId     String
+  producto       Producto          @relation(fields: [productoId], references: [id])
+  varianteId     String?
+  variante       ProductoVariante? @relation(fields: [varianteId], references: [id])
+  /// Nombre congelado al momento de vender: si el producto se renombra o se
+  /// elimina, el comprobante histórico debe seguir mostrando lo que se vendió.
+  descripcion    String?
+  cantidad       Int
+  precioUnitario Decimal           @db.Decimal(12, 2)
+  costoUnitario  Decimal?          @db.Decimal(12, 2)
+  /// Descuento aplicado a esta línea (monto absoluto, ya calculado).
+  descuento      Decimal           @default(0) @db.Decimal(12, 2)
+  subtotal       Decimal           @default(0) @db.Decimal(12, 2)
+
+  @@index([ventaId])
+  @@index([productoId])
+  @@map("venta_detalles")
+}
+
+/// RF-011 — Registro inmutable de anulación/edición.
+/// A nivel de aplicación: `motivo` es obligatorio cuando accion = ANULADA,
+/// opcional cuando accion = EDITADA (regla validada en la capa de servicio, no en el schema).
+model VentaAuditoria {
+  id        String          @id @default(cuid())
+  ventaId   String
+  venta     Venta           @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  usuarioId String
+  usuario   Usuario         @relation(fields: [usuarioId], references: [id])
+  accion    AccionAuditoria
+  motivo    String?
+  createdAt DateTime        @default(now())
+
+  @@index([ventaId])
+  @@map("venta_auditorias")
+}
+
+/// Módulo 5 — Abono a una cuenta por cobrar (fiado).
+/// Si `ventaId` viene, el abono se imputa a esa venta puntual; si no, se
+/// aplica en orden cronológico a las ventas fiadas pendientes del cliente
+/// (ver src/lib/fiados.ts).
+model Abono {
+  id        String    @id @default(cuid())
+  negocioId String
+  negocio   Negocio   @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  clienteId String
+  cliente   Cliente   @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  ventaId   String?
+  venta     Venta?    @relation(fields: [ventaId], references: [id])
+  numero    Int
+  monto     Decimal   @db.Decimal(12, 2)
+  formaPago FormaPago @default(EFECTIVO)
+  nota      String?
+  usuarioId String
+  usuario   Usuario   @relation(fields: [usuarioId], references: [id])
+  createdAt DateTime  @default(now())
+
+  comprobantes Comprobante[]
+
+  @@unique([negocioId, numero])
+  @@index([negocioId, createdAt])
+  @@index([clienteId])
+  @@map("abonos")
+}
+
+/// Módulo 6 — Categoría de gasto (arriendo, servicios, nómina, insumos...).
+model CategoriaGasto {
+  id        String   @id @default(cuid())
+  negocioId String
+  negocio   Negocio  @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  nombre    String
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  gastos Gasto[]
+
+  @@unique([negocioId, nombre])
+  @@index([negocioId])
+  @@map("categorias_gasto")
+}
+
+/// Módulo 6 — Egreso del negocio.
+/// `fecha` es independiente de `createdAt`: permite registrar hoy un gasto
+/// que ocurrió ayer sin distorsionar los reportes por período.
+model Gasto {
+  id               String          @id @default(cuid())
+  negocioId        String
+  negocio          Negocio         @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  categoriaGastoId String?
+  categoriaGasto   CategoriaGasto? @relation(fields: [categoriaGastoId], references: [id])
+  proveedorId      String?
+  proveedor        Proveedor?      @relation(fields: [proveedorId], references: [id])
+  numero           Int
+  descripcion      String
+  monto            Decimal         @db.Decimal(12, 2)
+  formaPago        FormaPago       @default(EFECTIVO)
+  fecha            DateTime        @default(now())
+  comprobanteUrl   String?
+  nota             String?
+  usuarioId        String
+  usuario          Usuario         @relation(fields: [usuarioId], references: [id])
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @default(now()) @updatedAt
+
+  @@unique([negocioId, numero])
+  @@index([negocioId, fecha])
+  @@map("gastos")
+}
+
+/// Módulo 7 — Proveedor. `saldoDeuda` es el total pendiente de pago por
+/// compras a crédito (espejo de Cliente.saldoDeuda pero de cuentas por pagar).
+model Proveedor {
+  id         String   @id @default(cuid())
+  negocioId  String
+  negocio    Negocio  @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  nombre     String
+  contacto   String?
+  email      String?
+  telefono   String?
+  nit        String?
+  direccion  String?
+  notas      String?
+  saldoDeuda Decimal  @default(0) @db.Decimal(12, 2)
+  activo     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now()) @updatedAt
+
+  compras Compra[]
+  gastos  Gasto[]
+  pagos   PagoProveedor[]
+
+  @@index([negocioId])
+  @@map("proveedores")
+}
+
+/// Módulo 7 — Compra / abastecimiento.
+/// El inventario NO se toca mientras la compra esté en BORRADOR; solo al
+/// recibirla (estado RECIBIDA) se generan los movimientos de entrada.
+model Compra {
+  id             String       @id @default(cuid())
+  negocioId      String
+  negocio        Negocio      @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  proveedorId    String
+  proveedor      Proveedor    @relation(fields: [proveedorId], references: [id])
+  numero         Int
+  numeroFactura  String?
+  estado         EstadoCompra @default(BORRADOR)
+  formaPago      FormaPago    @default(EFECTIVO)
+  subtotal       Decimal      @default(0) @db.Decimal(12, 2)
+  descuento      Decimal      @default(0) @db.Decimal(12, 2)
+  impuesto       Decimal      @default(0) @db.Decimal(12, 2)
+  total          Decimal      @default(0) @db.Decimal(12, 2)
+  saldoPendiente Decimal      @default(0) @db.Decimal(12, 2)
+  fecha          DateTime     @default(now())
+  nota           String?
+  usuarioId      String
+  usuario        Usuario      @relation(fields: [usuarioId], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @default(now()) @updatedAt
+
+  detalles CompraDetalle[]
+  pagos    PagoProveedor[]
+
+  @@unique([negocioId, numero])
+  @@index([negocioId, fecha])
+  @@index([proveedorId])
+  @@map("compras")
+}
+
+model CompraDetalle {
+  id            String            @id @default(cuid())
+  compraId      String
+  compra        Compra            @relation(fields: [compraId], references: [id], onDelete: Cascade)
+  productoId    String
+  producto      Producto          @relation(fields: [productoId], references: [id])
+  varianteId    String?
+  variante      ProductoVariante? @relation(fields: [varianteId], references: [id])
+  descripcion   String?
+  cantidad      Int
+  costoUnitario Decimal           @db.Decimal(12, 2)
+  descuento     Decimal           @default(0) @db.Decimal(12, 2)
+  subtotal      Decimal           @default(0) @db.Decimal(12, 2)
+
+  @@index([compraId])
+  @@map("compra_detalles")
+}
+
+/// Módulo 7 — Pago (o abono) a un proveedor sobre una compra a crédito.
+model PagoProveedor {
+  id          String    @id @default(cuid())
+  negocioId   String
+  negocio     Negocio   @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  proveedorId String
+  proveedor   Proveedor @relation(fields: [proveedorId], references: [id], onDelete: Cascade)
+  compraId    String?
+  compra      Compra?   @relation(fields: [compraId], references: [id])
+  monto       Decimal   @db.Decimal(12, 2)
+  formaPago   FormaPago @default(EFECTIVO)
+  nota        String?
+  usuarioId   String
+  usuario     Usuario   @relation(fields: [usuarioId], references: [id])
+  createdAt   DateTime  @default(now())
+
+  @@index([negocioId, createdAt])
+  @@index([proveedorId])
+  @@map("pagos_proveedor")
+}
+
+/// Módulo 11 — Comprobante digital emitido (ticket, factura, recibo...).
+/// `snapshot` congela en JSON el documento tal como se emitió (encabezado del
+/// negocio, líneas, totales). Así, si el producto cambia de precio o el
+/// negocio cambia de dirección, el comprobante ya emitido sigue siendo fiel.
+model Comprobante {
+  id         String            @id @default(cuid())
+  negocioId  String
+  negocio    Negocio           @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  tipo       TipoComprobante
+  serie      String            @default("A")
+  numero     Int
+  /// Identificador legible completo, ej. "TICKET-A-000123".
+  folio      String
+  ventaId    String?
+  venta      Venta?            @relation(fields: [ventaId], references: [id], onDelete: Cascade)
+  abonoId    String?
+  abono      Abono?            @relation(fields: [abonoId], references: [id], onDelete: Cascade)
+  estado     EstadoComprobante @default(EMITIDO)
+  snapshot   Json
+  total      Decimal           @db.Decimal(12, 2)
+  enviadoA   String?
+  medioEnvio MedioEnvio?
+  enviadoEn  DateTime?
+  usuarioId  String
+  usuario    Usuario           @relation(fields: [usuarioId], references: [id])
+  createdAt  DateTime          @default(now())
+
+  @@unique([negocioId, tipo, serie, numero])
+  @@index([negocioId, createdAt])
+  @@index([ventaId])
+  @@map("comprobantes")
+}
+
+/// Módulo 11 — Contador atómico de numeración por negocio y tipo de documento.
+/// Se incrementa con un UPDATE dentro de la misma transacción del documento,
+/// lo que evita folios duplicados bajo concurrencia sin bloqueos explícitos.
+model Consecutivo {
+  id        String          @id @default(cuid())
+  negocioId String
+  negocio   Negocio         @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  tipo      TipoConsecutivo
+  serie     String          @default("A")
+  valor     Int             @default(0)
+
+  @@unique([negocioId, tipo, serie])
+  @@map("consecutivos")
+}
