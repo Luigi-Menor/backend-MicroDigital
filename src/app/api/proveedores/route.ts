@@ -4,13 +4,13 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requerirSesionDeNegocio, requerirRol } from "@/lib/tenant";
 import { manejarErrorApi } from "@/lib/api-error";
-import { metaPaginacion, parsePaginacion, leerBooleano } from "@/lib/http";
+import { metaPaginacion, parsePaginacion, leerBooleano, emailOpcional } from "@/lib/http";
 
 // MÓDULO 7 — Proveedores.
 const crearSchema = z.object({
   nombre: z.string().min(2),
   contacto: z.string().optional(),
-  email: z.string().email().optional(),
+  email: emailOpcional(),
   telefono: z.string().optional(),
   nit: z.string().optional(),
   direccion: z.string().optional(),

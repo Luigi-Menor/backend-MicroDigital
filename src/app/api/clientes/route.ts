@@ -4,13 +4,13 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requerirSesionDeNegocio } from "@/lib/tenant";
 import { manejarErrorApi } from "@/lib/api-error";
-import { metaPaginacion, parsePaginacion, leerBooleano } from "@/lib/http";
+import { metaPaginacion, parsePaginacion, leerBooleano, emailOpcional } from "@/lib/http";
 
 // MÓDULO 4 — Clientes.
 const crearSchema = z.object({
   nombre: z.string().min(2),
   contacto: z.string().optional(),
-  email: z.string().email().optional(),
+  email: emailOpcional(),
   documento: z.string().optional(),
   direccion: z.string().optional(),
   notas: z.string().optional(),

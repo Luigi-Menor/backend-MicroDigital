@@ -3,11 +3,12 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requerirSesionDeNegocio, requerirRol } from "@/lib/tenant";
 import { manejarErrorApi, ErrorNoEncontrado, ErrorConflicto } from "@/lib/api-error";
+import { emailOpcionalNulable } from "@/lib/http";
 
 const actualizarSchema = z.object({
   nombre: z.string().min(2).optional(),
   contacto: z.string().nullable().optional(),
-  email: z.string().email().nullable().optional(),
+  email: emailOpcionalNulable(),
   telefono: z.string().nullable().optional(),
   nit: z.string().nullable().optional(),
   direccion: z.string().nullable().optional(),

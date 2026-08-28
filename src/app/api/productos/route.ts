@@ -76,9 +76,12 @@ export async function GET(req: NextRequest) {
     ]);
 
     const conAlerta = productos.reduce<typeof productos>((acc, p) => {
-      const stockBajo = p.variantes.length > 0
-        ? p.variantes.some((v) => v.stock <= v.stockMinimo)
-        : p.stock <= p.stockMinimo;
+      const stockBajo =
+        p.tipo === "SERVICIO"
+          ? false
+          : p.variantes.length > 0
+            ? p.variantes.some((v) => v.stock <= v.stockMinimo)
+            : p.stock <= p.stockMinimo;
       if (soloStockBajo === undefined || stockBajo === soloStockBajo) {
         acc.push({ ...p, stockBajo });
       }

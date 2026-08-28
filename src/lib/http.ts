@@ -34,6 +34,24 @@ export function metaPaginacion(total: number, { pagina, limite }: Paginacion) {
   };
 }
 
+/**
+ * Campo de correo opcional para formularios: el frontend manda `""` cuando el
+ * campo se deja vacío (no `undefined`), y `z.string().email().optional()` por
+ * sí solo rechaza esa cadena vacía con "Invalid email". Este helper la trata
+ * como "no se envió".
+ */
+export function emailOpcional() {
+  return z.preprocess((valor) => (valor === "" ? undefined : valor), z.string().email().optional());
+}
+
+/** Igual que `emailOpcional`, pero para PATCH/PUT donde el campo también acepta `null`. */
+export function emailOpcionalNulable() {
+  return z.preprocess(
+    (valor) => (valor === "" ? null : valor),
+    z.string().email().nullable().optional()
+  );
+}
+
 /** Lee un booleano de query string aceptando "true"/"1"/"si". */
 export function leerBooleano(valor: string | null): boolean | undefined {
   if (valor === null) return undefined;

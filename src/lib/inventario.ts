@@ -58,6 +58,9 @@ interface ProductoStock {
   nombre: string;
   negocioId: string;
   tieneVariantes: boolean;
+  activo: boolean;
+  precio: Decimal;
+  precioCosto: Decimal | null;
 }
 
 /**
@@ -76,6 +79,9 @@ export async function cargarProductoDelNegocio(
       tipo: true,
       nombre: true,
       negocioId: true,
+      activo: true,
+      precio: true,
+      precioCosto: true,
       _count: { select: { variantes: true } },
     },
   });
@@ -90,6 +96,9 @@ export async function cargarProductoDelNegocio(
     nombre: producto.nombre,
     negocioId: producto.negocioId,
     tieneVariantes: producto._count.variantes > 0,
+    activo: producto.activo,
+    precio: producto.precio,
+    precioCosto: producto.precioCosto,
   };
 }
 
