@@ -4,11 +4,13 @@ import { prisma } from "@/lib/db";
 import { verificarTokenGoogle } from "@/lib/google";
 import { firmarSesion, SESSION_COOKIE_NAME, opcionesCookieSesion } from "@/lib/session";
 import { manejarErrorApi } from "@/lib/api-error";
+import { exigirLimite, ipDeCliente, LIMITES } from "@/lib/rate-limit";
 
 const schema = z.object({ credential: z.string().min(10) });
 
 export async function POST(req: NextRequest) {
   try {
+    exigirLimite(`login:ip:${ipDeCliente(req)}`, LIMITES.loginPorIp.maximo, LIMITES.loginPorIp.ventana);
     const { credential } = schema.parse(await req.json());
     const perfil = await verificarTokenGoogle(credential);
 

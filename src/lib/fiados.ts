@@ -176,7 +176,14 @@ export async function recalcularSaldoCliente(
   });
   const saldo = redondear(agregado._sum.saldoPendiente ?? 0);
 
-  await tx.cliente.update({ where: { id: clienteId }, data: { saldoDeuda: saldo } });
+  // `negocioId` en el WHERE del UPDATE es lo que impide que un clienteId de
+  // otro negocio (que el agregado de arriba resuelve a 0) termine con su
+  // deuda borrada.
+  const { count } = await tx.cliente.updateMany({
+    where: { id: clienteId, negocioId },
+    data: { saldoDeuda: saldo },
+  });
+  if (count === 0) throw new ErrorFiado("Cliente no encontrado en este negocio");
   return saldo;
 }
 

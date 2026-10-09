@@ -16,7 +16,10 @@ export function aplicarCors(res: NextResponse, origin: string | null): NextRespo
     res.headers.set("Access-Control-Allow-Origin", permitido);
     res.headers.set("Access-Control-Allow-Credentials", "true");
   }
-  res.headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-  res.headers.set("Access-Control-Allow-Headers", "Content-Type");
+  res.headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  // Idempotency-Key debe estar aquí: sin él, el navegador rechaza en el
+  // preflight cualquier petición que lo envíe y la deduplicación de
+  // lib/idempotencia.ts nunca llega a usarse desde la interfaz.
+  res.headers.set("Access-Control-Allow-Headers", "Content-Type, Idempotency-Key");
   return res;
 }

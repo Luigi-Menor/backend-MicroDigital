@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { requerirSesionDeNegocio, requerirRol } from "@/lib/tenant";
 import { manejarErrorApi, ErrorNoEncontrado } from "@/lib/api-error";
 import { ejecutarIdempotente } from "@/lib/idempotencia";
+import { validarReferenciasDelNegocio } from "@/lib/referencias";
 
 const actualizarSchema = z.object({
   categoriaGastoId: z.string().cuid().nullable().optional(),
@@ -46,6 +47,10 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
 
     const existente = await gastoDelNegocio(params.id, sesion.negocioId);
     if (!existente) throw new ErrorNoEncontrado("Gasto no encontrado");
+    await validarReferenciasDelNegocio(prisma, sesion.negocioId, {
+      categoriaGastoId: data.categoriaGastoId,
+      proveedorId: data.proveedorId,
+    });
 
     const gasto = await prisma.gasto.update({
       where: { id: params.id },

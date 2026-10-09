@@ -8,6 +8,7 @@ import { siguienteConsecutivo } from "@/lib/consecutivos";
 import { metaPaginacion, parsePaginacion, quiereCsv, respuestaCsv, aCsv } from "@/lib/http";
 import { resolverRango, filtroFechas } from "@/lib/periodo";
 import { aNumero } from "@/lib/dinero";
+import { validarReferenciasDelNegocio } from "@/lib/referencias";
 
 // MÓDULO 6 — Gastos: registro y control de egresos.
 const crearGastoSchema = z.object({
@@ -100,6 +101,10 @@ export async function POST(req: NextRequest) {
     const data = crearGastoSchema.parse(await req.json());
 
     const gasto = await prisma.$transaction(async (tx) => {
+      await validarReferenciasDelNegocio(tx, sesion.negocioId, {
+        categoriaGastoId: data.categoriaGastoId,
+        proveedorId: data.proveedorId,
+      });
       const numero = await siguienteConsecutivo(tx, sesion.negocioId, "GASTO");
       return tx.gasto.create({
         data: {

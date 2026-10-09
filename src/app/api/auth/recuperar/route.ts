@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { hashToken } from "@/lib/hash-token";
 import { manejarErrorApi } from "@/lib/api-error";
+import { exigirLimite, ipDeCliente, LIMITES } from "@/lib/rate-limit";
 
 // RF-003 — El enlace de recuperación expira a los 15 minutos (valor confirmado
 // en el levantamiento, P.: recuperación de contraseña).
@@ -13,7 +14,19 @@ const schema = z.object({ email: z.string().email() });
 
 export async function POST(req: NextRequest) {
   try {
+    exigirLimite(
+      `recuperar:ip:${ipDeCliente(req)}`,
+      LIMITES.recuperarPorIp.maximo,
+      LIMITES.recuperarPorIp.ventana
+    );
     const { email } = schema.parse(await req.json());
+    // Por correo además de por IP: evita inundar el buzón de una víctima
+    // (y la tabla de tokens) rotando IPs.
+    exigirLimite(
+      `recuperar:correo:${email.toLowerCase()}`,
+      LIMITES.recuperarPorCorreo.maximo,
+      LIMITES.recuperarPorCorreo.ventana
+    );
     const usuario = await prisma.usuario.findUnique({ where: { email } });
 
     // Respuesta idéntica exista o no el usuario (no filtrar qué correos están registrados).

@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { requerirSesionDeNegocio, requerirRol } from "@/lib/tenant";
 import { manejarErrorApi } from "@/lib/api-error";
 import { metaPaginacion, parsePaginacion, leerBooleano } from "@/lib/http";
+import { validarReferenciasDelNegocio } from "@/lib/referencias";
 
 // MÓDULO 3 — Catálogo (productos y servicios), con variantes opcionales.
 // RF-007 — stock_minimo es OBLIGATORIO para tipo=PRODUCTO (P4: sin default).
@@ -102,6 +103,7 @@ export async function POST(req: NextRequest) {
     const data = crearProductoSchema.parse(await req.json());
 
     const producto = await prisma.$transaction(async (tx) => {
+      await validarReferenciasDelNegocio(tx, sesion.negocioId, { categoriaId: data.categoriaId });
       const creado = await tx.producto.create({
         data: {
           negocioId: sesion.negocioId,

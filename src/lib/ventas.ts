@@ -125,8 +125,11 @@ export async function crearVenta(tx: Prisma.TransactionClient, params: ParamsCre
     Promise.all(
       itemsArray.map((item) =>
         item.varianteId
-          ? tx.productoVariante.findUniqueOrThrow({
-              where: { id: item.varianteId },
+          ? // Filtrar por productoId hace que una variante ajena (de otro
+            // producto u otro negocio) resuelva a null y caiga en el error
+            // "no pertenece" de abajo, en vez de prestar su precio y nombre.
+            tx.productoVariante.findFirst({
+              where: { id: item.varianteId, productoId: item.productoId },
               select: { nombre: true, precio: true, precioCosto: true, activo: true },
             })
           : Promise.resolve(null)

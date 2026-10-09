@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { firmarSesion, SESSION_COOKIE_NAME, opcionesCookieSesion } from "@/lib/session";
 import { verifyPassword } from "@/lib/password";
 import { manejarErrorApi } from "@/lib/api-error";
+import { exigirLimite, ipDeCliente, LIMITES } from "@/lib/rate-limit";
 
 // RF-002 — Autenticación y redirección según rol (Superadmin / Admin / Vendedor).
 const loginSchema = z.object({
@@ -13,7 +14,13 @@ const loginSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
+    exigirLimite(`login:ip:${ipDeCliente(req)}`, LIMITES.loginPorIp.maximo, LIMITES.loginPorIp.ventana);
     const { email, password } = loginSchema.parse(await req.json());
+    exigirLimite(
+      `login:correo:${email.toLowerCase()}`,
+      LIMITES.loginPorCorreo.maximo,
+      LIMITES.loginPorCorreo.ventana
+    );
 
     const usuario = await prisma.usuario.findUnique({ where: { email } });
     // Mensaje genérico a propósito: no revelar si el correo existe o no.

@@ -89,8 +89,10 @@ export async function crearCompra(tx: Prisma.TransactionClient, params: ParamsCr
     Promise.all(
       params.items.map((item) =>
         item.varianteId
-          ? tx.productoVariante.findUniqueOrThrow({
-              where: { id: item.varianteId },
+          ? // Igual que en ventas: sin productoId, una variante ajena pasaría
+            // como válida y su nombre quedaría en el detalle de la compra.
+            tx.productoVariante.findFirst({
+              where: { id: item.varianteId, productoId: item.productoId },
               select: { nombre: true },
             })
           : Promise.resolve(null)

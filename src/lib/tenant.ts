@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import { Rol } from "@prisma/client";
 import { SESSION_COOKIE_NAME, verificarSesion, type SesionPayload } from "./session";
+import { prisma } from "./db";
 
 /**
  * Punto único de lectura de sesión para rutas API.
@@ -33,11 +34,41 @@ export class ErrorAutorizacion extends Error {
   status = 403;
 }
 
-/** Exige una sesión válida. Lanza 401 si no existe. */
+/**
+ * Exige una sesión válida. Lanza 401 si no existe.
+ *
+ * El JWT solo prueba QUIÉN es el usuario; su estado (activo, rol, negocio) se
+ * relee de la base en cada petición (RN-004 / RNF-004). Sin esto, desactivar
+ * a un vendedor o quitarle el rol de administrador no surtía efecto hasta que
+ * su token expiraba (hasta 8 h después). Cuesta una consulta por petición por
+ * clave primaria, que a la escala del MVP es despreciable frente al riesgo.
+ */
 export async function requerirSesion(req: NextRequest): Promise<SesionPayload> {
-  const sesion = await obtenerSesion(req);
-  if (!sesion) throw new ErrorAutenticacion("No autenticado");
-  return sesion;
+  const token = await obtenerSesion(req);
+  if (!token) throw new ErrorAutenticacion("No autenticado");
+
+  const usuario = await prisma.usuario.findUnique({
+    where: { id: token.usuarioId },
+    select: {
+      activo: true,
+      rol: true,
+      email: true,
+      negocioId: true,
+      negocio: { select: { activo: true } },
+    },
+  });
+  // Mismo mensaje para "no existe" y "desactivado": no revelar el motivo.
+  if (!usuario || !usuario.activo) throw new ErrorAutenticacion("Sesión no válida");
+  if (usuario.negocio && !usuario.negocio.activo) {
+    throw new ErrorAutorizacion("El negocio está desactivado");
+  }
+
+  return {
+    usuarioId: token.usuarioId,
+    negocioId: usuario.negocioId,
+    rol: usuario.rol,
+    email: usuario.email,
+  };
 }
 
 /**

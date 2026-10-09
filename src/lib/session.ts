@@ -10,12 +10,18 @@ import type { Rol } from "@prisma/client";
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN_SECONDS = Number(process.env.JWT_EXPIRES_IN_SECONDS ?? 28800);
 
-if (!JWT_SECRET && process.env.NODE_ENV === "production") {
-  // Zero Trust: nunca arrancar en producción sin secreto configurado.
-  throw new Error("JWT_SECRET no está configurado. Revisa tu archivo .env.");
+// Sin secreto de respaldo en NINGÚN entorno: un valor por defecto conocido
+// permite falsificar sesiones en cualquier instancia que se exponga sin .env
+// (staging, demos, una VM de pruebas). 32 caracteres es el mínimo razonable
+// para HS256.
+const LARGO_MINIMO_SECRETO = 32;
+if (!JWT_SECRET || JWT_SECRET.length < LARGO_MINIMO_SECRETO) {
+  throw new Error(
+    `JWT_SECRET no está configurado o tiene menos de ${LARGO_MINIMO_SECRETO} caracteres. Revisa tu archivo .env.`
+  );
 }
 
-const secretKey = new TextEncoder().encode(JWT_SECRET ?? "dev-secret-inseguro");
+const secretKey = new TextEncoder().encode(JWT_SECRET);
 
 export interface SesionPayload {
   usuarioId: string;

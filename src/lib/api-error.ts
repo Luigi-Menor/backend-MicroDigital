@@ -6,6 +6,7 @@ import { ErrorTokenGoogle } from "./google";
 import { ErrorStock } from "./inventario";
 import { ErrorFiado } from "./fiados";
 import { ErrorComprobante } from "./comprobante";
+import { ErrorLimiteSolicitudes } from "./rate-limit";
 
 /** Error de dominio con código HTTP explícito (404, 409...). */
 export class ErrorDominio extends Error {
@@ -30,6 +31,12 @@ export class ErrorConflicto extends ErrorDominio {
 
 /** Traduce cualquier error conocido del dominio a una respuesta HTTP consistente. */
 export function manejarErrorApi(error: unknown) {
+  if (error instanceof ErrorLimiteSolicitudes) {
+    return NextResponse.json(
+      { error: error.message },
+      { status: 429, headers: { "Retry-After": String(error.reintentarEnSegundos) } }
+    );
+  }
   if (error instanceof ErrorAutenticacion || error instanceof ErrorTokenGoogle) {
     return NextResponse.json({ error: error.message }, { status: 401 });
   }

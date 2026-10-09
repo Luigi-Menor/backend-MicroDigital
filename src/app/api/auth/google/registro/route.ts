@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { verificarTokenGoogle } from "@/lib/google";
 import { firmarSesion, SESSION_COOKIE_NAME, opcionesCookieSesion } from "@/lib/session";
 import { manejarErrorApi } from "@/lib/api-error";
+import { exigirLimite, ipDeCliente, LIMITES } from "@/lib/rate-limit";
 
 // Mismos datos de negocio que el registro clásico (RF-001), pero sin
 // nombreAdmin/email/password: esos tres vienen verificados del token de
@@ -17,6 +18,11 @@ const schema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
+    exigirLimite(
+      `registro:ip:${ipDeCliente(req)}`,
+      LIMITES.registroPorIp.maximo,
+      LIMITES.registroPorIp.ventana
+    );
     const body = schema.parse(await req.json());
     const perfil = await verificarTokenGoogle(body.credential);
 

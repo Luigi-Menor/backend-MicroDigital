@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { firmarSesion, SESSION_COOKIE_NAME, opcionesCookieSesion } from "@/lib/session";
 import { hashPassword } from "@/lib/password";
 import { manejarErrorApi } from "@/lib/api-error";
+import { exigirLimite, ipDeCliente, LIMITES } from "@/lib/rate-limit";
 
 // RF-001 — El sistema debe permitir que una persona registre un nuevo negocio
 // proporcionando nombre, tipo de negocio y datos de contacto, creando
@@ -19,6 +20,11 @@ const registroSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
+    exigirLimite(
+      `registro:ip:${ipDeCliente(req)}`,
+      LIMITES.registroPorIp.maximo,
+      LIMITES.registroPorIp.ventana
+    );
     const body = registroSchema.parse(await req.json());
 
     const correoExistente = await prisma.usuario.findUnique({ where: { email: body.email } });

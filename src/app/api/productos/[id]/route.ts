@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requerirSesionDeNegocio, requerirRol } from "@/lib/tenant";
 import { manejarErrorApi, ErrorNoEncontrado } from "@/lib/api-error";
+import { validarReferenciasDelNegocio } from "@/lib/referencias";
 
 const actualizarSchema = z.object({
   nombre: z.string().min(2).optional(),
@@ -46,6 +47,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
 
     const existente = await obtenerProductoDelNegocio(params.id, sesion.negocioId);
     if (!existente) throw new ErrorNoEncontrado("Producto no encontrado");
+    await validarReferenciasDelNegocio(prisma, sesion.negocioId, { categoriaId: data.categoriaId });
 
     // El stock NUNCA se edita desde aquí a propósito: hacerlo saltaría el
     // kardex (módulo 2). Para corregir existencias se usa
