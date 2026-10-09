@@ -5,6 +5,7 @@ import { requerirSesionDeNegocio, requerirRol } from "@/lib/tenant";
 import { manejarErrorApi } from "@/lib/api-error";
 import { aplicarPagoProveedor } from "@/lib/compras";
 import { metaPaginacion, parsePaginacion } from "@/lib/http";
+import { ejecutarIdempotente } from "@/lib/idempotencia";
 
 // MÓDULO 7 — Pagos a proveedores (cuentas por pagar).
 const crearPagoSchema = z.object({
@@ -48,13 +49,26 @@ export async function POST(req: NextRequest) {
   try {
     const sesion = await requerirSesionDeNegocio(req);
     requerirRol(sesion, "ADMINISTRADOR");
-    const data = crearPagoSchema.parse(await req.json());
 
-    const pago = await prisma.$transaction((tx) =>
-      aplicarPagoProveedor(tx, { ...data, negocioId: sesion.negocioId, usuarioId: sesion.usuarioId })
+    // Un pago a proveedor duplicado por reintento descontaría la deuda dos
+    // veces: ver ejecutarIdempotente.
+    return await ejecutarIdempotente(
+      req,
+      { negocioId: sesion.negocioId, endpoint: "POST /api/proveedores/pagos" },
+      async () => {
+        try {
+          const data = crearPagoSchema.parse(await req.json());
+
+          const pago = await prisma.$transaction((tx) =>
+            aplicarPagoProveedor(tx, { ...data, negocioId: sesion.negocioId, usuarioId: sesion.usuarioId })
+          );
+
+          return NextResponse.json({ pago }, { status: 201 });
+        } catch (error) {
+          return manejarErrorApi(error);
+        }
+      }
     );
-
-    return NextResponse.json({ pago }, { status: 201 });
   } catch (error) {
     return manejarErrorApi(error);
   }

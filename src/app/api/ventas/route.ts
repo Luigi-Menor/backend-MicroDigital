@@ -8,6 +8,7 @@ import { crearVenta } from "@/lib/ventas";
 import { emitirComprobante } from "@/lib/comprobante";
 import { metaPaginacion, parsePaginacion } from "@/lib/http";
 import { resolverRango, filtroFechas } from "@/lib/periodo";
+import { ejecutarIdempotente } from "@/lib/idempotencia";
 
 // MÓDULO 1 — Ventas / POS
 // POST /api/ventas  -> registrar venta (con descuentos, variantes y comprobante)
@@ -97,39 +98,48 @@ export async function POST(req: NextRequest) {
   try {
     const sesion = await requerirSesionDeNegocio(req);
     requerirRol(sesion, "ADMINISTRADOR", "VENDEDOR");
-    const body = crearVentaSchema.parse(await req.json());
 
-    // Toda la venta —valoración, stock, deuda y comprobante— ocurre en una
-    // sola transacción: si el comprobante falla, la venta no debe quedar
-    // registrada a medias con el stock ya descontado.
-    const resultado = await prisma.$transaction(async (tx) => {
-      const venta = await crearVenta(tx, {
-        negocioId: sesion.negocioId,
-        usuarioId: sesion.usuarioId,
-        items: body.items,
-        formaPago: body.formaPago,
-        clienteId: body.clienteId,
-        descuento: body.descuento,
-        descuentoPorcentaje: body.descuentoPorcentaje,
-        aplicarImpuesto: body.aplicarImpuesto,
-        montoPagado: body.montoPagado,
-        nota: body.nota,
-      });
+    // Reintentos de un mismo click (timeout de red, doble tap en el POS) no
+    // deben descontar stock ni registrar deuda dos veces: ver ejecutarIdempotente.
+    return await ejecutarIdempotente(req, { negocioId: sesion.negocioId, endpoint: "POST /api/ventas" }, async () => {
+      try {
+        const body = crearVentaSchema.parse(await req.json());
 
-      let comprobante = null;
-      if (body.emitirComprobante) {
-        comprobante = await emitirComprobante(tx, {
-          negocioId: sesion.negocioId,
-          usuarioId: sesion.usuarioId,
-          tipo: body.emitirComprobante,
-          origen: { clase: "venta", ventaId: venta.id },
+        // Toda la venta —valoración, stock, deuda y comprobante— ocurre en una
+        // sola transacción: si el comprobante falla, la venta no debe quedar
+        // registrada a medias con el stock ya descontado.
+        const resultado = await prisma.$transaction(async (tx) => {
+          const venta = await crearVenta(tx, {
+            negocioId: sesion.negocioId,
+            usuarioId: sesion.usuarioId,
+            items: body.items,
+            formaPago: body.formaPago,
+            clienteId: body.clienteId,
+            descuento: body.descuento,
+            descuentoPorcentaje: body.descuentoPorcentaje,
+            aplicarImpuesto: body.aplicarImpuesto,
+            montoPagado: body.montoPagado,
+            nota: body.nota,
+          });
+
+          let comprobante = null;
+          if (body.emitirComprobante) {
+            comprobante = await emitirComprobante(tx, {
+              negocioId: sesion.negocioId,
+              usuarioId: sesion.usuarioId,
+              tipo: body.emitirComprobante,
+              origen: { clase: "venta", ventaId: venta.id },
+            });
+          }
+
+          return { venta, comprobante };
         });
+
+        return NextResponse.json(resultado, { status: 201 });
+      } catch (error) {
+        return manejarErrorApi(error);
       }
-
-      return { venta, comprobante };
     });
-
-    return NextResponse.json(resultado, { status: 201 });
   } catch (error) {
     return manejarErrorApi(error);
   }

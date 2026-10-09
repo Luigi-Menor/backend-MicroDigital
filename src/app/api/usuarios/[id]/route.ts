@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requerirSesionDeNegocio, requerirRol } from "@/lib/tenant";
 import { manejarErrorApi } from "@/lib/api-error";
+import { ejecutarIdempotente } from "@/lib/idempotencia";
 
 const actualizarSchema = z.object({
   nombre: z.string().min(2).optional(),
@@ -53,30 +54,41 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   try {
     const sesion = await requerirSesionDeNegocio(req);
     requerirRol(sesion, "ADMINISTRADOR");
-    const data = actualizarSchema.parse(await req.json());
 
-    const usuario = await prisma.usuario.findUnique({ where: { id: params.id } });
-    if (!usuario || usuario.negocioId !== sesion.negocioId) {
-      return NextResponse.json({ error: "Usuario no encontrado" }, { status: 404 });
-    }
-    if (usuario.rol !== "VENDEDOR") {
-      return NextResponse.json(
-        { error: "Solo se pueden editar usuarios con rol Vendedor" },
-        { status: 403 }
-      );
-    }
+    return await ejecutarIdempotente(
+      req,
+      { negocioId: sesion.negocioId, endpoint: `PUT /api/usuarios/${params.id}` },
+      async () => {
+        try {
+          const data = actualizarSchema.parse(await req.json());
 
-    const actualizado = await prisma.usuario.update({
-      where: { id: params.id },
-      data: {
-        ...data,
-        fechaIngreso: data.fechaIngreso !== undefined
-          ? data.fechaIngreso === null ? null : new Date(data.fechaIngreso)
-          : undefined,
-      },
-      select: SELECT_PUBLICO,
-    });
-    return NextResponse.json({ usuario: actualizado });
+          const usuario = await prisma.usuario.findUnique({ where: { id: params.id } });
+          if (!usuario || usuario.negocioId !== sesion.negocioId) {
+            return NextResponse.json({ error: "Usuario no encontrado" }, { status: 404 });
+          }
+          if (usuario.rol !== "VENDEDOR") {
+            return NextResponse.json(
+              { error: "Solo se pueden editar usuarios con rol Vendedor" },
+              { status: 403 }
+            );
+          }
+
+          const actualizado = await prisma.usuario.update({
+            where: { id: params.id },
+            data: {
+              ...data,
+              fechaIngreso: data.fechaIngreso !== undefined
+                ? data.fechaIngreso === null ? null : new Date(data.fechaIngreso)
+                : undefined,
+            },
+            select: SELECT_PUBLICO,
+          });
+          return NextResponse.json({ usuario: actualizado });
+        } catch (error) {
+          return manejarErrorApi(error);
+        }
+      }
+    );
   } catch (error) {
     return manejarErrorApi(error);
   }

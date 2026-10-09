@@ -7,6 +7,7 @@ import { manejarErrorApi } from "@/lib/api-error";
 import { crearCompra } from "@/lib/compras";
 import { metaPaginacion, parsePaginacion } from "@/lib/http";
 import { resolverRango, filtroFechas } from "@/lib/periodo";
+import { ejecutarIdempotente } from "@/lib/idempotencia";
 
 // MÓDULO 7 — Compras / abastecimiento.
 const itemSchema = z.object({
@@ -75,26 +76,33 @@ export async function POST(req: NextRequest) {
   try {
     const sesion = await requerirSesionDeNegocio(req);
     requerirRol(sesion, "ADMINISTRADOR");
-    const data = crearCompraSchema.parse(await req.json());
 
-    const compra = await prisma.$transaction((tx) =>
-      crearCompra(tx, {
-        negocioId: sesion.negocioId,
-        usuarioId: sesion.usuarioId,
-        proveedorId: data.proveedorId,
-        items: data.items,
-        numeroFactura: data.numeroFactura,
-        formaPago: data.formaPago,
-        descuento: data.descuento,
-        descuentoPorcentaje: data.descuentoPorcentaje,
-        impuesto: data.impuesto,
-        fecha: data.fecha,
-        nota: data.nota,
-        recibirInmediatamente: data.recibirInmediatamente,
-      })
-    );
+    return await ejecutarIdempotente(req, { negocioId: sesion.negocioId, endpoint: "POST /api/compras" }, async () => {
+      try {
+        const data = crearCompraSchema.parse(await req.json());
 
-    return NextResponse.json({ compra }, { status: 201 });
+        const compra = await prisma.$transaction((tx) =>
+          crearCompra(tx, {
+            negocioId: sesion.negocioId,
+            usuarioId: sesion.usuarioId,
+            proveedorId: data.proveedorId,
+            items: data.items,
+            numeroFactura: data.numeroFactura,
+            formaPago: data.formaPago,
+            descuento: data.descuento,
+            descuentoPorcentaje: data.descuentoPorcentaje,
+            impuesto: data.impuesto,
+            fecha: data.fecha,
+            nota: data.nota,
+            recibirInmediatamente: data.recibirInmediatamente,
+          })
+        );
+
+        return NextResponse.json({ compra }, { status: 201 });
+      } catch (error) {
+        return manejarErrorApi(error);
+      }
+    });
   } catch (error) {
     return manejarErrorApi(error);
   }

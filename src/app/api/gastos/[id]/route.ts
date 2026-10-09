@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requerirSesionDeNegocio, requerirRol } from "@/lib/tenant";
 import { manejarErrorApi, ErrorNoEncontrado } from "@/lib/api-error";
+import { ejecutarIdempotente } from "@/lib/idempotencia";
 
 const actualizarSchema = z.object({
   categoriaGastoId: z.string().cuid().nullable().optional(),
@@ -62,11 +63,21 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     const sesion = await requerirSesionDeNegocio(req);
     requerirRol(sesion, "ADMINISTRADOR");
 
-    const existente = await gastoDelNegocio(params.id, sesion.negocioId);
-    if (!existente) throw new ErrorNoEncontrado("Gasto no encontrado");
+    return await ejecutarIdempotente(
+      req,
+      { negocioId: sesion.negocioId, endpoint: `DELETE /api/gastos/${params.id}` },
+      async () => {
+        try {
+          const existente = await gastoDelNegocio(params.id, sesion.negocioId);
+          if (!existente) throw new ErrorNoEncontrado("Gasto no encontrado");
 
-    await prisma.gasto.delete({ where: { id: params.id } });
-    return NextResponse.json({ mensaje: "Gasto eliminado" });
+          await prisma.gasto.delete({ where: { id: params.id } });
+          return NextResponse.json({ mensaje: "Gasto eliminado" });
+        } catch (error) {
+          return manejarErrorApi(error);
+        }
+      }
+    );
   } catch (error) {
     return manejarErrorApi(error);
   }

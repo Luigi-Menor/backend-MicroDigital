@@ -149,6 +149,7 @@ model Negocio {
   pagosProveedor  PagoProveedor[]
   comprobantes    Comprobante[]
   consecutivos    Consecutivo[]
+  idempotentRequests IdempotentRequest[]
 
   @@map("negocios")
 }
@@ -659,4 +660,28 @@ model Consecutivo {
 
   @@unique([negocioId, tipo, serie])
   @@map("consecutivos")
+}
+
+/// Deduplicación de peticiones mutadoras vía el header `Idempotency-Key`
+/// (ver src/lib/idempotencia.ts). `clave` combina negocio + endpoint + la
+/// key enviada por el cliente, para que la misma key no colisione entre
+/// negocios distintos ni entre rutas distintas.
+/// `respuestaStatus`/`respuestaBody` quedan null mientras la operación
+/// original todavía está en curso (protege contra doble-click concurrente);
+/// se completan cuando esa operación termina, y desde ahí cualquier retry
+/// con la misma key recibe la respuesta cacheada sin volver a ejecutarla.
+model IdempotentRequest {
+  id              String   @id @default(cuid())
+  clave           String   @unique
+  negocioId       String
+  negocio         Negocio  @relation(fields: [negocioId], references: [id], onDelete: Cascade)
+  endpoint        String
+  respuestaStatus Int?
+  respuestaBody   Json?
+  createdAt       DateTime @default(now())
+  expiraEn        DateTime
+
+  @@index([negocioId])
+  @@index([expiraEn])
+  @@map("idempotent_requests")
 }
