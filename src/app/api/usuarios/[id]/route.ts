@@ -2,12 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { requerirSesionDeNegocio, requerirRol } from "@/lib/tenant";
-import { manejarErrorApi } from "@/lib/api-error";
+import { manejarErrorApi, ErrorConflicto } from "@/lib/api-error";
 import { ejecutarIdempotente } from "@/lib/idempotencia";
 
 const actualizarSchema = z.object({
   nombre: z.string().min(2).optional(),
   activo: z.boolean().optional(),
+  // RF-011: el administrador puede cambiar el rol de cualquier usuario de su negocio.
+  rol: z.enum(["ADMINISTRADOR", "VENDEDOR"]).optional(),
   telefono: z.string().nullable().optional(),
   documento: z.string().nullable().optional(),
   cargo: z.string().nullable().optional(),
@@ -66,23 +68,59 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
           if (!usuario || usuario.negocioId !== sesion.negocioId) {
             return NextResponse.json({ error: "Usuario no encontrado" }, { status: 404 });
           }
-          if (usuario.rol !== "VENDEDOR") {
+          if (usuario.rol === "SUPERADMIN") {
+            return NextResponse.json({ error: "Usuario no encontrado" }, { status: 404 });
+          }
+
+          const cambiaRol = data.rol !== undefined && data.rol !== usuario.rol;
+          const desactiva = data.activo === false && usuario.activo;
+          if ((cambiaRol || desactiva) && usuario.id === sesion.usuarioId) {
             return NextResponse.json(
-              { error: "Solo se pueden editar usuarios con rol Vendedor" },
-              { status: 403 }
+              { error: "No puedes cambiar tu propio rol ni desactivar tu propia cuenta" },
+              { status: 409 }
             );
           }
 
-          const actualizado = await prisma.usuario.update({
-            where: { id: params.id },
-            data: {
-              ...data,
-              fechaIngreso: data.fechaIngreso !== undefined
-                ? data.fechaIngreso === null ? null : new Date(data.fechaIngreso)
-                : undefined,
+          const actualizado = await prisma.$transaction(
+            async (tx) => {
+              // Un negocio nunca puede quedarse sin un administrador activo
+              // (nadie podría gestionar usuarios ni catálogo). Se comprueba
+              // dentro de una transacción serializable para que dos
+              // administradores que se degradan a la vez no dejen cero.
+              const dejaDeSerAdminActivo =
+                usuario.rol === "ADMINISTRADOR" &&
+                usuario.activo &&
+                (data.rol === "VENDEDOR" || data.activo === false);
+              if (dejaDeSerAdminActivo) {
+                const otros = await tx.usuario.count({
+                  where: {
+                    negocioId: sesion.negocioId,
+                    rol: "ADMINISTRADOR",
+                    activo: true,
+                    id: { not: usuario.id },
+                  },
+                });
+                if (otros === 0) {
+                  throw new ErrorConflicto("El negocio debe conservar al menos un administrador activo");
+                }
+              }
+
+              return tx.usuario.update({
+                where: { id: params.id },
+                data: {
+                  ...data,
+                  fechaIngreso:
+                    data.fechaIngreso !== undefined
+                      ? data.fechaIngreso === null
+                        ? null
+                        : new Date(data.fechaIngreso)
+                      : undefined,
+                },
+                select: SELECT_PUBLICO,
+              });
             },
-            select: SELECT_PUBLICO,
-          });
+            { isolationLevel: "Serializable" }
+          );
           return NextResponse.json({ usuario: actualizado });
         } catch (error) {
           return manejarErrorApi(error);

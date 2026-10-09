@@ -7,6 +7,7 @@ import { ErrorStock } from "./inventario";
 import { ErrorFiado } from "./fiados";
 import { ErrorComprobante } from "./comprobante";
 import { ErrorLimiteSolicitudes } from "./rate-limit";
+import { ErrorCorreo } from "./correo";
 
 /** Error de dominio con código HTTP explícito (404, 409...). */
 export class ErrorDominio extends Error {
@@ -36,6 +37,11 @@ export function manejarErrorApi(error: unknown) {
       { error: error.message },
       { status: 429, headers: { "Retry-After": String(error.reintentarEnSegundos) } }
     );
+  }
+  if (error instanceof ErrorCorreo) {
+    // 503: el servicio de correo no está disponible o no está configurado; el
+    // mensaje es seguro de mostrar (nunca incluye credenciales).
+    return NextResponse.json({ error: error.message }, { status: 503 });
   }
   if (error instanceof ErrorAutenticacion || error instanceof ErrorTokenGoogle) {
     return NextResponse.json({ error: error.message }, { status: 401 });

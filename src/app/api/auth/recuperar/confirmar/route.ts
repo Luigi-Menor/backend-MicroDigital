@@ -20,21 +20,40 @@ export async function POST(req: NextRequest) {
     );
     const { token, password } = schema.parse(await req.json());
 
-    const registro = await prisma.passwordResetToken.findUnique({
-      where: { tokenHash: hashToken(token) },
+    const tokenHash = hashToken(token);
+    const passwordHash = await hashPassword(password);
+
+    // El enlace se consume con una sola escritura condicionada (no "leer y
+    // luego marcar"): si dos peticiones llegan a la vez con el mismo enlace,
+    // solo una encuentra `usado = false` y la otra recibe count = 0 (RNF-002:
+    // un solo uso).
+    const resultado = await prisma.$transaction(async (tx) => {
+      const consumido = await tx.passwordResetToken.updateMany({
+        where: { tokenHash, usado: false, expiresAt: { gt: new Date() } },
+        data: { usado: true },
+      });
+      if (consumido.count === 0) return null;
+
+      const registro = await tx.passwordResetToken.findUnique({ where: { tokenHash } });
+      if (!registro) return null;
+
+      await tx.usuario.update({ where: { id: registro.usuarioId }, data: { passwordHash } });
+      // Cualquier otro enlace pendiente del usuario deja de servir.
+      await tx.passwordResetToken.updateMany({
+        where: { usuarioId: registro.usuarioId, usado: false },
+        data: { usado: true },
+      });
+      return registro.usuarioId;
     });
-    if (!registro || registro.usado || registro.expiresAt < new Date()) {
+
+    if (!resultado) {
       return NextResponse.json(
-        { error: "El enlace es inválido o ya expiró (15 minutos de validez)." },
+        {
+          error: `El enlace es inválido o ya expiró (${process.env.PASSWORD_RESET_EXPIRES_MINUTES ?? 15} minutos de validez).`,
+        },
         { status: 400 }
       );
     }
-
-    const passwordHash = await hashPassword(password);
-    await prisma.$transaction([
-      prisma.usuario.update({ where: { id: registro.usuarioId }, data: { passwordHash } }),
-      prisma.passwordResetToken.update({ where: { id: registro.id }, data: { usado: true } }),
-    ]);
 
     return NextResponse.json({ mensaje: "Contraseña actualizada correctamente." });
   } catch (error) {

@@ -7,10 +7,13 @@ import { manejarErrorApi } from "@/lib/api-error";
 import { leerBooleano } from "@/lib/http";
 
 // MÓDULO 10 — Empleados (el mismo modelo Usuario, ver nota en schema.prisma).
-const crearVendedorSchema = z.object({
+const crearUsuarioSchema = z.object({
   nombre: z.string().min(2),
   email: z.string().email(),
   password: z.string().min(8),
+  // RF-011: el administrador asigna el rol. SUPERADMIN no es asignable aquí:
+  // no pertenece a ningún negocio.
+  rol: z.enum(["ADMINISTRADOR", "VENDEDOR"]).default("VENDEDOR"),
   telefono: z.string().optional(),
   documento: z.string().optional(),
   cargo: z.string().optional(),
@@ -52,12 +55,13 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST /api/usuarios — RF-004: crear vendedor. Sin límite en el MVP (RN-003).
+// POST /api/usuarios — RF-011: crear un usuario del negocio con el rol indicado
+// (por defecto VENDEDOR). Sin límite en el MVP (RN-003).
 export async function POST(req: NextRequest) {
   try {
     const sesion = await requerirSesionDeNegocio(req);
     requerirRol(sesion, "ADMINISTRADOR");
-    const data = crearVendedorSchema.parse(await req.json());
+    const data = crearUsuarioSchema.parse(await req.json());
 
     const existente = await prisma.usuario.findUnique({ where: { email: data.email } });
     if (existente) {
@@ -71,7 +75,7 @@ export async function POST(req: NextRequest) {
         nombre: data.nombre,
         email: data.email,
         passwordHash,
-        rol: "VENDEDOR",
+        rol: data.rol,
         telefono: data.telefono,
         documento: data.documento,
         cargo: data.cargo,
