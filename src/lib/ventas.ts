@@ -141,6 +141,9 @@ export async function crearVenta(tx: Prisma.TransactionClient, params: ParamsCre
     const item = itemsArray[i];
     const producto = productosCargados[i];
     const variante = variantesCargadas[i];
+    // Los tres arreglos tienen el mismo largo; la guarda solo existe para que
+    // TypeScript (noUncheckedIndexedAccess) sepa que no son undefined.
+    if (!item || !producto) throw new Error("Línea de documento fuera de rango");
 
     if (!Number.isInteger(item.cantidad) || item.cantidad <= 0) {
       throw new ErrorDominio("La cantidad de cada línea debe ser un entero positivo");
@@ -292,22 +295,24 @@ export async function crearVenta(tx: Prisma.TransactionClient, params: ParamsCre
 
   // 6. Descontar existencias. `aplicarMovimiento` valida el stock de forma
   //    atómica y deja el rastro en el kardex; los servicios se omiten solos.
-  await Promise.all(
-    lineas.map((linea) =>
-      aplicarMovimiento(tx, {
-        negocioId: params.negocioId,
-        productoId: linea.productoId,
-        varianteId: linea.varianteId,
-        tipo: "VENTA",
-        cantidad: linea.cantidad,
-        costoUnitario: linea.costoUnitario,
-        referenciaTipo: "venta",
-        referenciaId: venta.id,
-        usuarioId: params.usuarioId,
-        motivo: `Venta #${numero}`,
-      })
-    )
-  );
+  // En secuencia, no con Promise.all: dentro de una transacción interactiva
+  // Prisma ejecuta las consultas de una en una sobre la misma conexión, así
+  // que el paralelismo no gana nada; y si una línea falla, las que seguían en
+  // vuelo chocaban con la transacción ya revertida.
+  for (const linea of lineas) {
+    await aplicarMovimiento(tx, {
+      negocioId: params.negocioId,
+      productoId: linea.productoId,
+      varianteId: linea.varianteId,
+      tipo: "VENTA",
+      cantidad: linea.cantidad,
+      costoUnitario: linea.costoUnitario,
+      referenciaTipo: "venta",
+      referenciaId: venta.id,
+      usuarioId: params.usuarioId,
+      motivo: `Venta #${numero}`,
+    });
+  }
 
   // 7. Acumular la deuda del cliente si fue fiado.
   if (esFiado && params.clienteId) {

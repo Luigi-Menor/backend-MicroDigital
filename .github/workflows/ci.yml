@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verificar:
+    name: Tipos, pruebas y build
+    runs-on: ubuntu-latest
+
+    # PostgreSQL real: las pruebas de aislamiento, concurrencia y rollback
+    # necesitan la base de verdad, no mocks.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: microdigital
+          POSTGRES_PASSWORD: microdigital
+          POSTGRES_DB: microdigital_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U microdigital"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Valores solo para CI: la base vive y muere con el job.
+      DATABASE_URL: postgresql://microdigital:microdigital@localhost:5432/microdigital_test?schema=public
+      DATABASE_URL_TEST: postgresql://microdigital:microdigital@localhost:5432/microdigital_test?schema=public
+      JWT_SECRET: secreto-exclusivo-de-ci-no-usar-en-produccion-0123456789
+      FRONTEND_URL: http://localhost:3000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npx prisma generate
+
+      - name: Verificar tipos
+        run: npm run typecheck
+
+      # Aplica las migraciones sobre una base vacía (detecta errores de orden
+      # como el de modulos_completos) y corre las pruebas de integración.
+      - name: Pruebas
+        run: npm test
+
+      - name: Build de producción
+        run: npm run build

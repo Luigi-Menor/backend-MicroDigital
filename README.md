@@ -83,10 +83,61 @@ src/app/api/**           Endpoints REST
   (`verifyIdToken`), nunca decodificado a mano para tomar decisiones de
   autenticación.
 
+## Pruebas automáticas
+
+Pruebas de integración con [Vitest](https://vitest.dev) contra una PostgreSQL
+**real** (`tests/`). Cubren lo que el SRS marca como crítico y no se puede
+verificar con mocks:
+
+| Archivo | Qué protege |
+|---|---|
+| `aislamiento.test.ts` | RNF-005 / RN-025: ningún negocio lee ni enlaza datos de otro |
+| `sesion-y-roles.test.ts` | RNF-004 / RN-004 / RF-011: sesión revalidada, roles, fuerza bruta |
+| `concurrencia.test.ts` | RNF-007: stock sin negativos, consecutivos sin duplicados, idempotencia |
+| `integridad.test.ts` | RNF-006: rollback de la venta, fiados, anulaciones, compras |
+| `recuperacion.test.ts` | RF-007 / RF-008 / RNF-002: enlace de un solo uso, vencimiento |
+
+```bash
+# Una sola vez: crear la base de pruebas (mismo servidor que la de desarrollo)
+psql -U <usuario> -c "CREATE DATABASE solobackend_test;"
+
+npm test            # corre todo una vez
+npm run test:watch  # modo observación
+```
+
+La base de pruebas es `DATABASE_URL_TEST` o, si no está definida, la de
+`DATABASE_URL` con `_test` añadido al nombre. **Las pruebas se niegan a
+correr si el nombre de la base no termina en `_test`**, porque vacían las
+tablas antes de cada caso. Antes de empezar aplican las migraciones con
+`prisma migrate deploy` sobre esa base, así que también verifican que las
+migraciones funcionen desde cero.
+
+CI (`.github/workflows/ci.yml`) ejecuta en cada push y pull request:
+`typecheck`, pruebas (con su propio PostgreSQL) y `next build`.
+
+## Migraciones: corrección de orden (octubre 2026)
+
+La migración `20260827120000_modulos_completos` tenía fecha **anterior** a
+`20260828020715_init` aunque depende de ella. En una base nueva Prisma la
+aplicaba primero y fallaba (`no existe el tipo «FormaPago»`). Se renombró a
+`20260828030000_modulos_completos` (mismo contenido, mismo checksum).
+
+Si una base ya tenía aplicadas las migraciones con el nombre viejo,
+`prisma migrate status` mostrará una migración "no encontrada localmente" y
+otra "pendiente". Se corrige actualizando solo el registro de control (no
+toca datos ni tablas):
+
+```sql
+UPDATE "_prisma_migrations"
+SET migration_name = '20260828030000_modulos_completos'
+WHERE migration_name = '20260827120000_modulos_completos';
+```
+
 ## Pendiente
 
-- RF-011: falta la edición real de ítems de una venta (hoy solo cambia el
+- RF-044: falta la edición real de ítems de una venta (hoy solo cambia el
   estado a `EDITADA`).
-- Sin pruebas automatizadas ni rate limiting en login/recuperación.
-- Sin paginación en `/api/ventas`, `/api/productos`, `/api/clientes`.
-- Envío real de correo pendiente en RF-003 (hoy solo se loguea en consola).
+- Auditoría general de operaciones sensibles (RNF-008), procedimiento de
+  copias de seguridad (RNF-014) y logs estructurados (RNF-015).
+- El límite de intentos vive en memoria: con más de una instancia del backend
+  hay que moverlo a Redis.

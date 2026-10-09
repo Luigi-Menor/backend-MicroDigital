@@ -104,6 +104,9 @@ export async function crearCompra(tx: Prisma.TransactionClient, params: ParamsCr
     const item = params.items[i];
     const producto = productosCargados[i];
     const variante = variantesCargadas[i];
+    // Los tres arreglos tienen el mismo largo; la guarda solo existe para que
+    // TypeScript (noUncheckedIndexedAccess) sepa que no son undefined.
+    if (!item || !producto) throw new Error("Línea de documento fuera de rango");
 
     if (!Number.isInteger(item.cantidad) || item.cantidad <= 0) {
       throw new ErrorDominio("La cantidad de cada línea debe ser un entero positivo");
@@ -201,37 +204,39 @@ export async function recibirCompra(
   if (compra.estado === "RECIBIDA") throw new ErrorConflicto("La compra ya fue recibida");
   if (compra.estado === "ANULADA") throw new ErrorConflicto("La compra está anulada");
 
-  await Promise.all(
-    compra.detalles.map(async (detalle) => {
-      await aplicarMovimiento(tx, {
-        negocioId: params.negocioId,
-        productoId: detalle.productoId,
-        varianteId: detalle.varianteId,
-        tipo: "COMPRA",
-        cantidad: detalle.cantidad,
-        costoUnitario: detalle.costoUnitario,
-        referenciaTipo: "compra",
-        referenciaId: compra.id,
-        usuarioId: params.usuarioId,
-        motivo: `Compra #${compra.numero}`,
-      });
+  // En secuencia, no con Promise.all: dentro de una transacción interactiva
+  // Prisma ejecuta las consultas de una en una sobre la misma conexión, así
+  // que el paralelismo no gana nada; y si una línea falla, las que seguían en
+  // vuelo chocaban con la transacción ya revertida.
+  for (const detalle of compra.detalles) {
+    await aplicarMovimiento(tx, {
+      negocioId: params.negocioId,
+      productoId: detalle.productoId,
+      varianteId: detalle.varianteId,
+      tipo: "COMPRA",
+      cantidad: detalle.cantidad,
+      costoUnitario: detalle.costoUnitario,
+      referenciaTipo: "compra",
+      referenciaId: compra.id,
+      usuarioId: params.usuarioId,
+      motivo: `Compra #${compra.numero}`,
+    });
 
-      // El costo de reposición del catálogo se actualiza con el precio de la
-      // última compra: es la aproximación estándar de costeo para un
-      // micronegocio sin sistema de costos promedio ponderado.
-      if (detalle.varianteId) {
-        await tx.productoVariante.update({
-          where: { id: detalle.varianteId },
-          data: { precioCosto: detalle.costoUnitario },
-        });
-      } else {
-        await tx.producto.update({
-          where: { id: detalle.productoId },
-          data: { precioCosto: detalle.costoUnitario },
-        });
-      }
-    })
-  );
+    // El costo de reposición del catálogo se actualiza con el precio de la
+    // última compra: es la aproximación estándar de costeo para un
+    // micronegocio sin sistema de costos promedio ponderado.
+    if (detalle.varianteId) {
+      await tx.productoVariante.update({
+        where: { id: detalle.varianteId },
+        data: { precioCosto: detalle.costoUnitario },
+      });
+    } else {
+      await tx.producto.update({
+        where: { id: detalle.productoId },
+        data: { precioCosto: detalle.costoUnitario },
+      });
+    }
+  }
 
   if (compra.formaPago !== "EFECTIVO" && compra.formaPago !== "TARJETA") {
     await tx.proveedor.update({

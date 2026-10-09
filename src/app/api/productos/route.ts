@@ -76,7 +76,7 @@ export async function GET(req: NextRequest) {
       prisma.producto.count({ where }),
     ]);
 
-    const conAlerta = productos.reduce<typeof productos>((acc, p) => {
+    const conAlerta = productos.reduce<Array<(typeof productos)[number] & { stockBajo: boolean }>>((acc, p) => {
       const stockBajo =
         p.tipo === "SERVICIO"
           ? false

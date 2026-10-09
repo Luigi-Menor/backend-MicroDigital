@@ -379,9 +379,12 @@ export async function revertirMovimientosDeDocumento(
   const tipoInverso: Exclude<TipoMovimiento, "AJUSTE"> =
     params.referenciaTipo === "venta" ? "ANULACION_VENTA" : "ANULACION_COMPRA";
 
-  await Promise.all(
-    movimientos.map((movimiento) =>
-      aplicarMovimiento(tx, {
+  // En secuencia, no con Promise.all: dentro de una transacción interactiva
+  // Prisma ejecuta las consultas de una en una sobre la misma conexión, así
+  // que el paralelismo no gana nada; y si una línea falla, las que seguían en
+  // vuelo chocaban con la transacción ya revertida.
+  for (const movimiento of movimientos) {
+    await aplicarMovimiento(tx, {
         negocioId: params.negocioId,
         productoId: movimiento.productoId,
         varianteId: movimiento.varianteId,
@@ -393,9 +396,8 @@ export async function revertirMovimientosDeDocumento(
         referenciaId: params.referenciaId,
         usuarioId: params.usuarioId,
         permitirNegativo: tipoInverso === "ANULACION_COMPRA",
-      })
-    )
-  );
+    });
+  }
 
   return movimientos.length;
 }
